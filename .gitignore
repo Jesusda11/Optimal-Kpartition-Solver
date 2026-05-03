@@ -54,4 +54,8 @@ htmlcov/
 dist/
 build/
 
-.log
+*.log
+
+# Salidas generadas en tiempo de ejecucion (profiling, logs, resolver)
+review/
+.logs/

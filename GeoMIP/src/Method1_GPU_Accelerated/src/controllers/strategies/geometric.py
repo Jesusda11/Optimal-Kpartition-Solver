@@ -5,7 +5,6 @@ from src.constants.base import NET_LABEL, STR_ZERO
 from src.funcs.base import ABECEDARY
 from src.middlewares.slogger import SafeLogger
 from src.funcs.base import emd_efecto
-from src.funcs.decay import decay_exponencial, get_decay
 from src.models.base.sia import SIA
 from src.constants.base import (
     ACTUAL,
@@ -29,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 import itertools
 
 class GeometricSIA(SIA):
-    def __init__(self, gestor: Manager, decay_fn=None):
+    def __init__(self, gestor: Manager):
         super().__init__(gestor)
         profiler_manager.start_session(
             f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}"
@@ -40,8 +39,6 @@ class GeometricSIA(SIA):
         self.vertices :set[tuple]
         self.tabla :dict[int, list[tuple[int, int]]] = {}
         self.memoria_particiones: dict[tuple[int, int], tuple[float, float]] = {}
-        # Factor de decrecimiento γ(d). Por defecto: exponencial 2^(-d) (comportamiento original).
-        self.decay_fn = decay_fn if decay_fn is not None else decay_exponencial
 
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(
@@ -160,7 +157,7 @@ class GeometricSIA(SIA):
         if key not in self.tabla_transiciones:
             self.tabla_transiciones[key] = [None]*len(self.sia_subsistema.indices_ncubos)
         distancia_hamming = self.hamming(estado_inicial, estado_final)
-        factor = self.decay_fn(distancia_hamming)
+        factor = 1/(2**distancia_hamming)
         # index_inicial = tuple(np.array(estado_inicial)[::-1])
         # index_final = tuple(np.array(estado_final)[::-1])
 
