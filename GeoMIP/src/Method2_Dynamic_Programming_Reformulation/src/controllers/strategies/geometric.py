@@ -28,8 +28,13 @@ from typing import List, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import itertools
 
+# Numero minimo de estados por nivel para activar paralelizacion.
+# Por debajo de este umbral el overhead de crear el pool supera el beneficio.
+_PARALLEL_UMBRAL: int = 4
+
+
 class GeometricSIA(SIA):
-    def __init__(self, gestor: Manager, decay_fn=None):
+    def __init__(self, gestor: Manager, decay_fn=None, parallel: bool = True):
         super().__init__(gestor)
         profiler_manager.start_session(
             f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}"
@@ -42,6 +47,8 @@ class GeometricSIA(SIA):
         self.memoria_particiones: dict[tuple[int, int], tuple[float, float]] = {}
         # Factor de decrecimiento γ(d). Por defecto: exponencial 2^(-d) (comportamiento original).
         self.decay_fn = decay_fn if decay_fn is not None else decay_exponencial
+        # Habilitar paralelizacion de calcular_costos_nivel con ThreadPoolExecutor.
+        self.parallel = parallel
 
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(
@@ -128,10 +135,13 @@ class GeometricSIA(SIA):
             self.memoria_particiones, key=lambda k: self.memoria_particiones[k][0]
         )
     
-    def calcular_costos_nivel(self,estado_final: np.ndarray, nivel):
-        n = len(estado_final)      
-        visitados:set[tuple] = set()
-        self.caminos[nivel] = []
+    def calcular_costos_nivel(self, estado_final: np.ndarray, nivel):
+        n = len(estado_final)
+        visitados: set[tuple] = set()
+        nuevos_estados: list = []
+
+        # Fase 1 — recoleccion secuencial de todos los estados nuevos del nivel.
+        # Debe ser secuencial porque construye 'visitados' para evitar duplicados.
         for estado_anterior in self.caminos[nivel - 1]:
             estado_actual = np.array(estado_anterior)
             for i in range(n):
@@ -140,9 +150,30 @@ class GeometricSIA(SIA):
                     nuevo_estado[i] = estado_final[i]
                     nuevo_estado_tuple = tuple(nuevo_estado)
                     if nuevo_estado_tuple not in visitados:
-                        self.caminos[nivel].append(nuevo_estado.tolist())
-                        self.calcular_costo(self.caminos[0][0],nuevo_estado.tolist(),self.idx_ncubos)
+                        nuevos_estados.append(nuevo_estado.tolist())
                         visitados.add(nuevo_estado_tuple)
+
+        self.caminos[nivel] = nuevos_estados
+
+        estado_base = self.caminos[0][0]
+        idx = self.idx_ncubos
+
+        # Fase 2 — calculo de costos.
+        # Los estados dentro del mismo nivel son independientes entre si:
+        # calcular_costo(estado_base, s, ...) solo lee tabla_transiciones[nivel-1]
+        # (ya completo) y escribe en una clave unica (estado_base, s).
+        # Por tanto es seguro ejecutarlos en paralelo sin locks.
+        if self.parallel and len(nuevos_estados) > _PARALLEL_UMBRAL:
+            with ThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(self.calcular_costo, estado_base, estado, idx)
+                    for estado in nuevos_estados
+                ]
+                for future in futures:
+                    future.result()
+        else:
+            for estado in nuevos_estados:
+                self.calcular_costo(estado_base, estado, idx)
 
     def calcular_costo(self, estado_inicial:tuple, estado_final:tuple, ncubos:list[int]):
         """
