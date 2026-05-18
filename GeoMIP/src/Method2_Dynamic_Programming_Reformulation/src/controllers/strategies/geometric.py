@@ -6,6 +6,7 @@ from src.funcs.base import ABECEDARY
 from src.middlewares.slogger import SafeLogger
 from src.funcs.base import emd_efecto
 from src.funcs.decay import decay_exponencial, get_decay
+from src.funcs.distances import distancia_hamming as _dist_hamming, DISTANCE_VARIANTS
 from src.models.base.sia import SIA
 from src.constants.base import (
     ACTUAL,
@@ -34,7 +35,7 @@ _PARALLEL_UMBRAL: int = 4
 
 
 class GeometricSIA(SIA):
-    def __init__(self, gestor: Manager, decay_fn=None, parallel: bool = True):
+    def __init__(self, gestor: Manager, decay_fn=None, parallel: bool = True, dist_fn=None):
         super().__init__(gestor)
         profiler_manager.start_session(
             f"{NET_LABEL}{len(gestor.estado_inicial)}{gestor.pagina}"
@@ -49,6 +50,13 @@ class GeometricSIA(SIA):
         self.decay_fn = decay_fn if decay_fn is not None else decay_exponencial
         # Habilitar paralelizacion de calcular_costos_nivel con ThreadPoolExecutor.
         self.parallel = parallel
+        # Especificacion de la metrica de distancia para el factor γ.
+        # None o "hamming" → distancia_hamming (comportamiento original).
+        # "hamming_normalizado" | "jaccard" → variantes topologicas.
+        # "causal" → distancia_causal (requiere _flat_data, se resuelve en _setup_dist_fn).
+        # Callable → se usa directamente.
+        self._dist_fn_spec = dist_fn
+        self.dist_fn = None  # resuelto en _setup_dist_fn()
 
     @profile(context={TYPE_TAG: GEOMETRIC_ANALYSIS_TAG})
     def aplicar_estrategia(
@@ -84,9 +92,12 @@ class GeometricSIA(SIA):
         self._flat_data = []
         for idx, ncubo in enumerate(self.sia_subsistema.ncubos):
             # garantías: ncubo.data.shape == (2,2,...,2)
-            # np.ravel() lo aplana. El orden ‘C’ equivale 
+            # np.ravel() lo aplana. El orden ‘C’ equivale
             # a little-endian si tus tuples están invertidas.
             self._flat_data.append(ncubo.data.ravel())
+
+        # dist_fn puede ser "causal", que necesita _flat_data ya construido.
+        self._setup_dist_fn()
 
         self.vertices = set(presente + futuro)
         dims = self.sia_subsistema.dims_ncubos
@@ -105,6 +116,33 @@ class GeometricSIA(SIA):
             particion=fmt_mip,
         )
     
+    def _setup_dist_fn(self):
+        """Resuelve self.dist_fn a partir de self._dist_fn_spec. Llamar despues de construir _flat_data."""
+        spec = self._dist_fn_spec
+        if spec is None or spec == "hamming":
+            self.dist_fn = _dist_hamming
+        elif spec == "causal":
+            self.dist_fn = self.distancia_causal
+        elif callable(spec):
+            self.dist_fn = spec
+        else:
+            self.dist_fn = DISTANCE_VARIANTS[spec]
+
+    def distancia_causal(self, a: list, b: list) -> float:
+        """
+        Distancia entre estados a y b basada en la similitud de sus
+        distribuciones de transicion condicional (info-teorica).
+
+        d(a,b) = (1/M) * sum_k |P(V_{t+1}^k=0|V_t=a) - P(V_{t+1}^k=0|V_t=b)|
+
+        donde M es el numero de variables futuras. Valores en [0, 1].
+        Requiere que self._flat_data este construido (llamar tras aplicar_estrategia).
+        """
+        a_int = int("".join(map(str, a[::-1])), 2)
+        b_int = int("".join(map(str, b[::-1])), 2)
+        total = sum(abs(float(fd[a_int]) - float(fd[b_int])) for fd in self._flat_data)
+        return total / len(self._flat_data)
+
     def nodes_complement(self, nodes: list[tuple[int, int]]):
         return list(set(self.vertices) - set(nodes))
     
@@ -190,8 +228,11 @@ class GeometricSIA(SIA):
         key = tuple(estado_inicial), tuple(estado_final)
         if key not in self.tabla_transiciones:
             self.tabla_transiciones[key] = [None]*len(self.sia_subsistema.indices_ncubos)
-        distancia_hamming = self.hamming(estado_inicial, estado_final)
-        factor = self.decay_fn(distancia_hamming)
+        # d_hamming controla la estructura del BFS (guarda de recursion).
+        # d se pasa a decay_fn y puede ser cualquier metrica configurada.
+        d_hamming = self.hamming(estado_inicial, estado_final)
+        d = self.dist_fn(list(estado_inicial), list(estado_final))
+        factor = self.decay_fn(d)
         # index_inicial = tuple(np.array(estado_inicial)[::-1])
         # index_final = tuple(np.array(estado_final)[::-1])
 
@@ -208,7 +249,7 @@ class GeometricSIA(SIA):
         # for idx in ncubos:
         #     self.tabla_transiciones[key][idx] = (abs(self.sia_subsistema.ncubos[idx].data[index_inicial]-self.sia_subsistema.ncubos[idx].data[index_final]))
         
-        if distancia_hamming > 1:
+        if d_hamming > 1:
             for i in range(len(estado_inicial)):
                 if estado_inicial[i] != estado_final[i]:
                     nuevo_estado = estado_final.copy()
