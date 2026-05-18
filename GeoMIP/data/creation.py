@@ -1,3 +1,6 @@
+from fileinput import filename
+from pathlib import Path
+
 import numpy as np
 import time
 import os
@@ -31,10 +34,10 @@ class SystemCreator:
         return self.states[:, dimension]
 
     def save_to_csv(self, filename: str = None):
-        filename = f'Sys{self.N}.csv' if filename is None else filename
-
-        os.makedirs('.assets', exist_ok=True)
-        filepath = os.path.join('.assets', filename)
+        filename = f'N{self.N}A.csv' if filename is None else filename
+        samples_dir = Path(__file__).resolve().parent / "samples"
+        samples_dir.mkdir(parents=True, exist_ok=True)
+        filepath = samples_dir / filename
         print(f'\nGuardando estados en {filepath}...')
 
         start_time = time.time()
@@ -62,7 +65,7 @@ def generate_and_save(N: int):
 
 if __name__ == '__main__':
     try:
-        system = generate_and_save(8)
+        system = generate_and_save(20)
     except KeyboardInterrupt:
         print('\nOperación cancelada por el usuario')
     except Exception as e:

@@ -203,15 +203,15 @@ def iniciar():
     ruta_salida = Path(
         os.getenv(
             "GEOMIP_OUTPUT_XLSX",
-            str(GEOMIP_ROOT / "results" / "resultados_Geometric_15B.xlsx"),
+            str(GEOMIP_ROOT / "results" / "resultados_Geometric_20A.xlsx"),
         )
     )
 
     ejecutar_desde_excel(
         ruta_excel    = ruta_entrada,
         ruta_salida   = ruta_salida,
-        sheet_name    = "15B-Elementos",   # hoja de 15 variables
+        sheet_name    = "20A-Elementos",   # hoja de 20 variables
         inicio        = 0,
         cantidad      = 50,
-        estado_inicio = "100000000000000", # estado inicial fijo para N=15
+        estado_inicio = "10000000000000000000", # estado inicial fijo para N=20
     )
