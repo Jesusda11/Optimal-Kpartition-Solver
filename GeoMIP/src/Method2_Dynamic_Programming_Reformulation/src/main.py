@@ -1,77 +1,12 @@
-# from src.controllers.manager import Manager
-
-# from src.controllers.strategies.force import BruteForce
-# from src.controllers.strategies.q_nodes import QNodes
-# from src.controllers.strategies.geometric import GeometricSIA
-
-
-# def iniciar():
-#     """Punto de entrada principal"""
-#                     # ABCD #
-#     # estado_inicial = "100"
-#     # condiciones =    "111"
-#     # alcance =        "111"
-#     # mecanismo =      "111"
-#     # estado_inicial = "0000"
-#     # condiciones =    "1111"
-#     # alcance =        "1111"
-#     # mecanismo =      "1111"
-#     # estado_inicial = "1000"
-#     # condiciones =    "1111"
-#     # alcance =        "0111"
-#     # mecanismo =      "1111"
-#     # estado_inicial = "100000"
-#     # condiciones =    "111111"
-#     # alcance =        "101011"
-#     # mecanismo =      "111111"
-#     # estado_inicial = "100000"
-#     # condiciones =    "111111"
-#     # alcance =        "111111"
-#     # mecanismo =      "111111"
-#     # estado_inicial = "100000"
-#     # condiciones =    "111111"
-#     # alcance =        "111111"
-#     # mecanismo =      "011111"
-#     # estado_inicial = "1000000000"
-#     # condiciones =    "1111111111"
-#     # alcance =        "1111111111"
-#     # mecanismo =      "1111111111"
-#     estado_inicial = "1000000000"
-#     condiciones =    "1111111111"
-#     alcance =        "0101010101"
-#     mecanismo =      "1111111111"
-#     # estado_inicial = "1000000000"
-#     # condiciones =    "1111111111"
-#     # alcance =        "1111111110"
-#     # mecanismo =      "1111111111"
-#     # estado_inicial = "10000000000000000000"
-#     # condiciones =    "11111111111111111111"
-#     # alcance =        "11111111111111111111"
-#     # mecanismo =      "11111111111111111111"
-#     # estado_inicial = "10000000000000000000"
-#     # condiciones =    "11111111111111111111"
-#     # alcance =        "11011011011011011011"
-#     # mecanismo =      "10101010101010101010"
-
-#     gestor_sistema = Manager(estado_inicial)
-
-#     ### Ejemplo de solución mediante módulo de fuerza bruta ###
-#     analizador_fb = GeometricSIA(gestor_sistema)
-#     # analizador_fb = BruteForce(gestor_sistema)
-#     sia_uno = analizador_fb.aplicar_estrategia(
-#         condiciones,
-#         alcance,
-#         mecanismo,
-#     )
-#     print(sia_uno)
 from src.controllers.manager import Manager
 from src.controllers.strategies.geometric import GeometricSIA
 from src.controllers.strategies.q_nodes import QNodes
-# Optional import: this project often runs only geometric strategy.
+
 try:
     from src.controllers.strategies.phi import Phi
 except Exception:
     Phi = None
+
 import multiprocessing
 import numpy as np
 import pandas as pd
@@ -81,9 +16,15 @@ from pathlib import Path
 
 
 METHOD2_ROOT = Path(__file__).resolve().parents[1]
-GEOMIP_ROOT = Path(__file__).resolve().parents[3]
+GEOMIP_ROOT  = Path(__file__).resolve().parents[3]
 
-def convertir_a_binario(texto, n_bits=20):
+
+# ─────────────────────────────────────────────────────────────
+#  Helpers
+# ─────────────────────────────────────────────────────────────
+
+def convertir_a_binario(texto: str, n_bits: int = 20) -> str:
+    """Convert a letter-string like 'ABCDFG' to a binary string of length n_bits."""
     posiciones = "ABCDEFGHIJKLMNOPQRST"[:n_bits]
     binario = ["0"] * n_bits
     for letra in texto:
@@ -91,36 +32,35 @@ def convertir_a_binario(texto, n_bits=20):
             binario[posiciones.index(letra)] = "1"
     return "".join(binario)
 
+
 def ejecutar_con_tiempo(config_sistema, condiciones, alcance, mecanismo, resultado_queue, tpm):
     try:
         analizador_fi = GeometricSIA(config_sistema)
         sia_dos = analizador_fi.aplicar_estrategia(condiciones, alcance, mecanismo, tpm)
         resultado_queue.put({
             "particion": sia_dos.particion,
-            "perdida": str(sia_dos.perdida).replace('.', ','),
-            "tiempo": str(sia_dos.tiempo_ejecucion).replace('.', ','),
+            "perdida":   str(sia_dos.perdida).replace(".", ","),
+            "tiempo":    str(sia_dos.tiempo_ejecucion).replace(".", ","),
         })
-
     except Exception as e:
-        resultado_queue.put({
-            "particion": None,
-            "perdida": None,
-            "tiempo": None,
-        })
+        print(f"[ERROR en proceso hijo] {e}")
+        resultado_queue.put({"particion": None, "perdida": None, "tiempo": None})
+
 
 def resolver_tpm_path(estado_inicio: str) -> Path:
     """Find TPM file in common project locations based on state size."""
     sample_name = f"N{len(estado_inicio)}A.csv"
     candidates = (
         METHOD2_ROOT / "src" / ".samples" / sample_name,
-        METHOD2_ROOT / ".samples" / sample_name,
-        GEOMIP_ROOT / "data" / "samples" / sample_name,
+        METHOD2_ROOT / ".samples"          / sample_name,
+        GEOMIP_ROOT  / "data" / "samples"  / sample_name,
     )
     for candidate in candidates:
         if candidate.exists():
             return candidate
     raise FileNotFoundError(
-        f"No se encontró la TPM '{sample_name}'. Busqué en: {', '.join(str(c) for c in candidates)}"
+        f"No se encontró la TPM '{sample_name}'. "
+        f"Busqué en: {', '.join(str(c) for c in candidates)}"
     )
 
 
@@ -129,7 +69,7 @@ def inferir_estado_inicial() -> str:
     sample_dirs = (
         METHOD2_ROOT / "src" / ".samples",
         METHOD2_ROOT / ".samples",
-        GEOMIP_ROOT / "data" / "samples",
+        GEOMIP_ROOT  / "data" / "samples",
     )
     pattern = re.compile(r"N(\d+)[A-Z]\.csv$")
     available_sizes = []
@@ -143,49 +83,86 @@ def inferir_estado_inicial() -> str:
                 available_sizes.append(int(match.group(1)))
 
     if not available_sizes:
-        raise FileNotFoundError("No hay archivos de muestras TPM disponibles en data/samples ni .samples.")
+        raise FileNotFoundError(
+            "No hay archivos de muestras TPM disponibles en data/samples ni .samples."
+        )
 
     n_bits = max(available_sizes)
     return "1" + ("0" * (n_bits - 1))
 
 
+# ─────────────────────────────────────────────────────────────
+#  Core runner — adapted for the new Excel layout
+#
+#  New layout (DatosPruebas2026_1.xlsx, sheet "10A-Elementos"):
+#    Row 1 : Estado inicial  → col B  (e.g. 1000000000)
+#    Row 2 : Sistema         → col B
+#    Row 3 : Sistema cand.   → col B
+#    Row 4 : section label   → col B
+#    Row 5 : column headers  → #Prueba | Alcance (B) | Mecanismo (C) | …
+#    Row 6+: data rows       → int    | letter-string | letter-string
+# ─────────────────────────────────────────────────────────────
+
 def ejecutar_desde_excel(
-    ruta_excel: Path,
-    ruta_salida: Path,
-    inicio=0,
-    cantidad=50,
+    ruta_excel:   Path,
+    ruta_salida:  Path,
+    sheet_name:   str        = "10A-Elementos",
+    inicio:       int        = 0,
+    cantidad:     int        = 50,
     estado_inicio: str | None = None,
-    condiciones: str | None = None,
+    condiciones:  str | None  = None,
 ):
-    df = pd.read_excel(ruta_excel, sheet_name=8, usecols="B", skiprows=3, names=["Subsistema"]) #! here
-    filas = df["Subsistema"].dropna().tolist()
-    filas = filas[inicio:inicio + cantidad]
+    # ── 1. Read metadata from header rows ──────────────────────────────────
+    from openpyxl import load_workbook
+    wb = load_workbook(ruta_excel, read_only=True, data_only=True)
+    ws = wb[sheet_name]
+
+    # Row 1, col B  →  estado inicial (may come back as int, e.g. 1000000000)
+    raw_estado = ws["B1"].value
+    if estado_inicio is None:
+        estado_inicio = str(int(raw_estado)) if raw_estado is not None else inferir_estado_inicial()
+
+    n_bits      = len(estado_inicio)
+    condiciones = condiciones or ("1" * n_bits)
+    tpm_path    = resolver_tpm_path(estado_inicio)
+    tpm         = np.genfromtxt(tpm_path, delimiter=",")
+
+    print(f"[Config] estado_inicio={estado_inicio}  n_bits={n_bits}")
+    print(f"[Config] TPM cargada desde: {tpm_path}")
+    print(f"[Config] Hoja: '{sheet_name}'  |  Pruebas: {inicio+1} → {inicio+cantidad}")
+
+    # ── 2. Read data rows (start at Excel row 6 = openpyxl min_row=6) ──────
+    all_rows = []
+    for row in ws.iter_rows(min_row=6, max_col=3, values_only=True):
+        prueba, alcance_str, mecanismo_str = row
+        if prueba is not None and alcance_str is not None and mecanismo_str is not None:
+            all_rows.append((int(prueba), str(alcance_str).strip(), str(mecanismo_str).strip()))
+
+    wb.close()
+
+    filas = all_rows[inicio : inicio + cantidad]
     resultados = []
 
-    estado_inicio = estado_inicio or inferir_estado_inicial()
-    condiciones = condiciones or ("1" * len(estado_inicio))
-    tpm_path = resolver_tpm_path(estado_inicio)
-    tpm = np.genfromtxt(tpm_path, delimiter=",")
+    # ── 3. Run each test ────────────────────────────────────────────────────
+    for prueba_num, alcance_str, mecanismo_str in filas:
+        alcance   = convertir_a_binario(alcance_str,   n_bits=n_bits)
+        mecanismo = convertir_a_binario(mecanismo_str, n_bits=n_bits)
 
-    for i, fila in enumerate(filas, start=inicio + 1):
-        partes = fila.split("|")
-        if len(partes) != 2:
-            continue
+        print(f"\nIteración {prueba_num} — Alcance: {alcance_str!r} → {alcance}")
+        print(f"              Mecanismo: {mecanismo_str!r} → {mecanismo}")
 
-        alcance = convertir_a_binario(partes[0][:len(partes[0]) - 3], n_bits=len(estado_inicio))
-        mecanismo = convertir_a_binario(partes[1][:len(partes[1]) - 1], n_bits=len(estado_inicio))
-        print(f"Iteración {i} - Alcance: {alcance}, Mecanismo: {mecanismo}")
-
-        config_sistema = Manager(estado_inicial=estado_inicio)
-
+        config_sistema  = Manager(estado_inicial=estado_inicio)
         resultado_queue = multiprocessing.Queue()
-        proceso = multiprocessing.Process(target=ejecutar_con_tiempo, args=(config_sistema, condiciones, alcance, mecanismo, resultado_queue, tpm))
-        
+
+        proceso = multiprocessing.Process(
+            target=ejecutar_con_tiempo,
+            args=(config_sistema, condiciones, alcance, mecanismo, resultado_queue, tpm),
+        )
         proceso.start()
-        proceso.join(timeout=3600)  
+        proceso.join(timeout=3600)   # 1-hour hard limit per test
 
         if proceso.is_alive():
-            print(f"Iteración {i} - Tiempo límite alcanzado, terminando proceso...")
+            print(f"Iteración {prueba_num} — Tiempo límite alcanzado, terminando proceso…")
             proceso.terminate()
             proceso.join()
             resultado = {"perdida": None, "tiempo": None, "particion": None}
@@ -197,29 +174,44 @@ def ejecutar_desde_excel(
             )
 
         resultados.append({
-            "Iteración": i,
-            "Alcance": alcance,
-            "Mecanismo": mecanismo,
-            "Partición": resultado["particion"],
-            "Pérdida": resultado["perdida"],
+            "Iteración":              prueba_num,
+            "Alcance":                alcance,
+            "Mecanismo":              mecanismo,
+            "Partición":              resultado["particion"],
+            "Pérdida":                resultado["perdida"],
             "Tiempo de ejecución (s)": resultado["tiempo"],
         })
+
+    # ── 4. Save results ─────────────────────────────────────────────────────
     df_resultados = pd.DataFrame(resultados)
     ruta_salida.parent.mkdir(parents=True, exist_ok=True)
     df_resultados.to_excel(ruta_salida, index=False)
-    print(f"Resultados guardados en {ruta_salida}")
+    print(f"\n[OK] Resultados guardados en {ruta_salida}")
+
+
+# ─────────────────────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────────────────────
 
 def iniciar():
     ruta_entrada = Path(
         os.getenv(
             "GEOMIP_INPUT_XLSX",
-            str(GEOMIP_ROOT / "results" / "Pruebas_Metodo2.xlsx"),
+            str(GEOMIP_ROOT / "tests" / "DatosPruebas2026_1.xlsx"),
         )
     )
     ruta_salida = Path(
         os.getenv(
             "GEOMIP_OUTPUT_XLSX",
-            str(GEOMIP_ROOT / "results" / "resultados_Geometric.xlsx"),
+            str(GEOMIP_ROOT / "results" / "resultados_Geometric_15B.xlsx"),
         )
     )
-    ejecutar_desde_excel(ruta_entrada, ruta_salida)
+
+    ejecutar_desde_excel(
+        ruta_excel    = ruta_entrada,
+        ruta_salida   = ruta_salida,
+        sheet_name    = "15B-Elementos",   # hoja de 15 variables
+        inicio        = 0,
+        cantidad      = 50,
+        estado_inicio = "100000000000000", # estado inicial fijo para N=15
+    )
