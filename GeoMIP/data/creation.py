@@ -65,7 +65,7 @@ def generate_and_save(N: int):
 
 if __name__ == '__main__':
     try:
-        system = generate_and_save(20)
+        system = generate_and_save(22)
     except KeyboardInterrupt:
         print('\nOperación cancelada por el usuario')
     except Exception as e:

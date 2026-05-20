@@ -24,14 +24,12 @@ GEOMIP_ROOT  = Path(__file__).resolve().parents[3]
 # ─────────────────────────────────────────────────────────────
 
 def convertir_a_binario(texto: str, n_bits: int = 20) -> str:
-    """Convert a letter-string like 'ABCDFG' to a binary string of length n_bits."""
-    posiciones = "ABCDEFGHIJKLMNOPQRST"[:n_bits]
+    posiciones = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[:n_bits]
     binario = ["0"] * n_bits
     for letra in texto:
         if letra in posiciones:
             binario[posiciones.index(letra)] = "1"
     return "".join(binario)
-
 
 def ejecutar_con_tiempo(config_sistema, condiciones, alcance, mecanismo, resultado_queue, tpm):
     try:
@@ -203,15 +201,15 @@ def iniciar():
     ruta_salida = Path(
         os.getenv(
             "GEOMIP_OUTPUT_XLSX",
-            str(GEOMIP_ROOT / "results" / "resultados_Geometric_20A.xlsx"),
+            str(GEOMIP_ROOT / "results" / "resultados_Geometric_22A.xlsx"),
         )
     )
 
     ejecutar_desde_excel(
         ruta_excel    = ruta_entrada,
         ruta_salida   = ruta_salida,
-        sheet_name    = "20A-Elementos",   # hoja de 20 variables
+        sheet_name    = "22A-Elementos",   # hoja de 22 variables
         inicio        = 0,
         cantidad      = 50,
-        estado_inicio = "10000000000000000000", # estado inicial fijo para N=20
+        estado_inicio = "1000000000000000000000", # estado inicial fijo para N=22
     )
