@@ -245,6 +245,36 @@ class System:
         )
         return new_sys
 
+    def k_bipartir(self, grupos: list) -> "System":
+        """
+        Aplica una k-particion de nodos al sistema.
+
+        Cada grupo i recibe un subconjunto de nodos; la variable futura y la
+        variable presente de cada nodo van al mismo grupo (definicion S(n,k)).
+        El n-cubo j queda marginalmente condicionado solo sobre las variables
+        presentes de su propio grupo: marginalizar(setdiff(dims, presentes_i)).
+
+        Args:
+            grupos: lista de (futuros, presentes) donde cada elemento son
+                    arrays de indices reales de nodos pertenecientes al grupo.
+
+        Returns:
+            System con las marginalizaciones de cada grupo aplicadas.
+        """
+        presentes_por_indice: dict[int, np.ndarray] = {}
+        for futuros, presentes in grupos:
+            pres_arr = np.array(presentes, dtype=np.int8)
+            for idx in np.atleast_1d(futuros):
+                presentes_por_indice[int(idx)] = pres_arr
+
+        new_sys = System.__new__(System)
+        new_sys.estado_inicial = self.estado_inicial
+        new_sys.ncubos = tuple(
+            cube.marginalizar(np.setdiff1d(cube.dims, presentes_por_indice[int(cube.indice)]))
+            for cube in self.ncubos
+        )
+        return new_sys
+
     def distribucion_marginal(self):
         """
         Partiendo de idealmente un subsistema o una bipartición como entrada, se seleccionana los nodos/elementos cuando su estado es OFF o inactivo para cada uno de ellos, mediante la propiedad de las distribuciones marginales, esto nos permite calcular más eficientemente la EMD-Effect, logrando así determinar un coste para dar comparación entre idealmente, un sub-sistema y una bipartición. Hemos de aplicar una reversión en la selección del estado inicial puesto

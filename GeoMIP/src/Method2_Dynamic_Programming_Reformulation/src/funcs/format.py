@@ -37,6 +37,27 @@ def fmt_biparte_q(
     return f"{top_prim}{top_dual}\n{bottom_prim}{bottom_dual}"
 
 
+def fmt_k_particion(grupos: list[tuple[list[int], list[int]]]) -> str:
+    """
+    Formatea una k-particion de nodos como columnas adyacentes.
+
+    Args:
+        grupos: lista de (futuros, presentes) con indices reales de nodos.
+                Cada grupo es una tupla donde futuros y presentes contienen
+                los mismos indices de nodos (definicion S(n,k) completa).
+
+    Returns:
+        str con la k-particion en el mismo estilo visual que fmt_biparte_q.
+    """
+    tops, bottoms = [], []
+    for futuros, presentes in grupos:
+        nodos = [(1, int(f)) for f in futuros] + [(0, int(p)) for p in presentes]
+        top, bottom = fmt_parte_q(nodos)
+        tops.append(top)
+        bottoms.append(bottom)
+    return "".join(tops) + "\n" + "".join(bottoms)
+
+
 def fmt_parte_q(parte: list[tuple[int, int]], to_sort: bool = True) -> tuple[str, str]:
     if to_sort:
         # Ordenar por índice #
