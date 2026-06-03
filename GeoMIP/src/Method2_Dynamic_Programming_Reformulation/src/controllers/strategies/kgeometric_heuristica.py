@@ -64,6 +64,7 @@ class KGeometricSIAHeuristica(KGeometricSIA):
         self,
         gestor: Manager,
         k_max: int = 4,
+        k_min: int = 2,
         n_max_exhaustivo: int = 6,
         m_max_candidatos: int = 2000,
         decay_fn: Optional[Callable] = None,
@@ -77,6 +78,7 @@ class KGeometricSIAHeuristica(KGeometricSIA):
             parallel=parallel,
             dist_fn=dist_fn,
         )
+        self.k_min = max(2, k_min)
         self.n_max_exhaustivo = n_max_exhaustivo
         self.m_max_candidatos = m_max_candidatos
         self._modo_usado: str = "exacto"
@@ -225,7 +227,7 @@ class KGeometricSIAHeuristica(KGeometricSIA):
         if n <= self.n_max_exhaustivo:
             # ── Modo exacto: mismo flujo que KGeometricSIA ────────────────
             self._modo_usado = "exacto"
-            for k in range(2, min(self.k_max, n) + 1):
+            for k in range(self.k_min, min(self.k_max, n) + 1):
                 mejor_phi_k: float = float("inf")
                 mejor_asig_k: list = []
                 mejor_dist_k = None
@@ -263,7 +265,7 @@ class KGeometricSIAHeuristica(KGeometricSIA):
             self._modo_usado = "heuristico"
             self._construir_tabla_transiciones()
 
-            for k in range(2, min(self.k_max, n) + 1):
+            for k in range(self.k_min, min(self.k_max, n) + 1):
                 mejor_phi_k: float = float("inf")
                 mejor_asig_k: list = []
                 mejor_dist_k = None
