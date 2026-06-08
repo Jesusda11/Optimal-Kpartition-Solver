@@ -202,12 +202,14 @@ def _worker(
 # ── Ejecutor principal ────────────────────────────────────────────────────────
 
 def ejecutar_desde_excel(
-    sheet_name: str,
-    inicio:     int = 0,
-    cantidad:   int = 50,
-    k_min:      int = 2,
-    k_max:      int = 5,
-    timeout_s:  int = TIMEOUT_S,
+    sheet_name:   str,
+    inicio:       int = 0,
+    cantidad:     int = 50,
+    k_min:        int = 2,
+    k_max:        int = 5,
+    timeout_s:    int = TIMEOUT_S,
+    n_max_exacto: int = N_MAX_EXACTO,
+    etiqueta:     str = "",
 ) -> None:
     n, variante = parsear_hoja(sheet_name)
     estado_inicial, todos_casos = leer_excel(INPUT_XLSX, sheet_name)
@@ -215,14 +217,19 @@ def ejecutar_desde_excel(
     condiciones   = "1" * len(estado_inicial)
     filas         = todos_casos[inicio : inicio + cantidad]
 
-    ks_label = f"k={k_min}" if k_min == k_max else f"k={k_min}..{k_max}"
+    ks_label  = f"k={k_min}" if k_min == k_max else f"k={k_min}..{k_max}"
+    modo_label = "EXACTO EXHAUSTIVO" if n_max_exacto >= 999 else f"n_max_exacto={n_max_exacto}"
 
     print("=" * 70)
-    print(f"KGeoMIP Simetrico — Hoja: {sheet_name}  |  {ks_label}")
+    print(f"KGeoMIP Simetrico — Hoja: {sheet_name}  |  {ks_label}  |  {modo_label}")
     print(f"Estado inicial: {estado_inicial}  n={len(estado_inicial)}")
     print(f"TPM: {tpm_path}")
-    print(f"Pruebas: {inicio + 1} → {inicio + len(filas)}  |  n_max_exacto={N_MAX_EXACTO}")
+    print(f"Pruebas: {inicio + 1} → {inicio + len(filas)}")
     print(f"Timeout por prueba: {timeout_s}s ({timeout_s/3600:.1f}h)")
+    if n_max_exacto >= 999:
+        from src.funcs.partitions import contar_stirling
+        stirling_max = sum(contar_stirling(n, k) for k in range(k_min, k_max + 1))
+        print(f"AVISO: modo exacto — hasta {stirling_max:,} candidatos por caso (n_bal={n})")
     print("=" * 70)
 
     resultados = []
@@ -237,7 +244,7 @@ def ejecutar_desde_excel(
         proceso = multiprocessing.Process(
             target=_worker,
             args=(estado_inicial, condiciones, alcance, mecanismo,
-                  tpm, variante, N_MAX_EXACTO, k_min, k_max, cola),
+                  tpm, variante, n_max_exacto, k_min, k_max, cola),
         )
         t_ini = time.perf_counter()
         proceso.start()
@@ -293,7 +300,8 @@ def ejecutar_desde_excel(
     df          = pd.DataFrame(resultados)
     hoja_clean  = sheet_name.strip().replace(" ", "_")
     ks_suffix   = f"_k{k_min}" if k_min == k_max else f"_k{k_min}-{k_max}"
-    ruta_salida = GEOMIP_ROOT / "results" / f"resultados_kgeomip_simetrico_{hoja_clean}{ks_suffix}.xlsx"
+    eta_suffix  = f"_{etiqueta}" if etiqueta else ""
+    ruta_salida = GEOMIP_ROOT / "results" / f"resultados_kgeomip_simetrico_{hoja_clean}{ks_suffix}{eta_suffix}.xlsx"
     ruta_salida.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(ruta_salida, index=False)
 
@@ -313,6 +321,11 @@ def main() -> None:
     parser.add_argument("--cantidad", type=int, default=50,help="Pruebas a ejecutar (default 50)")
     parser.add_argument("--timeout",  type=int, default=TIMEOUT_S,
                         help=f"Timeout por prueba en segundos (default {TIMEOUT_S})")
+    parser.add_argument("--exacto", action="store_true",
+                        help="Forzar enumeracion exhaustiva S(n,k) para todos los casos "
+                             "(ignora n_max_exacto). Guarda con sufijo '_exacto'.")
+    parser.add_argument("--etiqueta", type=str, default="",
+                        help="Sufijo adicional para el nombre del archivo de salida")
 
     # Seleccion de k — mutuamente excluyentes: --k fija una sola k; --k_min/--k_max fijan rango
     k_group = parser.add_mutually_exclusive_group()
@@ -338,13 +351,18 @@ def main() -> None:
     if k_min > k_max:
         parser.error("k_min no puede ser mayor que k_max")
 
+    n_max_exacto = 999 if args.exacto else N_MAX_EXACTO
+    etiqueta     = "exacto" if args.exacto else args.etiqueta
+
     ejecutar_desde_excel(
-        sheet_name = args.hoja,
-        inicio     = args.inicio,
-        cantidad   = args.cantidad,
-        k_min      = k_min,
-        k_max      = k_max,
-        timeout_s  = args.timeout,
+        sheet_name   = args.hoja,
+        inicio       = args.inicio,
+        cantidad     = args.cantidad,
+        k_min        = k_min,
+        k_max        = k_max,
+        timeout_s    = args.timeout,
+        n_max_exacto = n_max_exacto,
+        etiqueta     = etiqueta,
     )
 
 
