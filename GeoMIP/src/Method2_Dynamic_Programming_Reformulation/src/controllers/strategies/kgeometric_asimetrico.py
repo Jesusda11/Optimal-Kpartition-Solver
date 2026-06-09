@@ -1,0 +1,417 @@
+"""
+src/controllers/strategies/kgeometric_asimetrico.py
+
+KGeometricSIAAsimetrico: k-MIP asimetrico sobre las 2n variables independientes.
+
+== Contexto ==
+
+Este modulo implementa el segundo de los dos enfoques de k-particion del proyecto
+K-QGMIP. El primero (KGeometricSIA / kgeometric.py) es el enfoque SIMETRICO: cada
+nodo j lleva su futuro J(t+1) y su presente j(t) al mismo grupo, generando
+S(n,k) candidatos sobre n nodos.
+
+Este modulo implementa el enfoque ASIMETRICO: se tratan las n variables futuras
+{J0(t+1),...,Jn-1(t+1)} y las n variables presentes {j0(t),...,jn-1(t)} como 2n
+entidades INDEPENDIENTES. Una k-particion asimetrica asigna cada variable a un
+grupo libremente — el futuro de un nodo y el presente del mismo nodo pueden ir a
+grupos distintos. Esto genera S(m,k) candidatos donde m = n_fut + n_pres = 2n
+(para sistemas balanceados).
+
+Ejemplos de crecimiento:
+  n=3  m=6:  S(6,2)=31    vs S(3,2)=3   simetrico
+  n=4  m=8:  S(8,2)=127   vs S(4,2)=7
+  n=5  m=10: S(10,2)=511  vs S(5,2)=15
+  n=10 m=20: S(20,2)=524287 vs S(10,2)=511
+
+Relacion con GeometricSIA (biparticion asimetrica original):
+  GeometricSIA usa biparticiones en las que un grupo de futuros ve TODOS los
+  presentes y el otro ve NINGUNO. Eso es un caso especial de nuestras S(2n,2)
+  biparticiones donde los presentes se distribuyen 0/all. KGeoMIPAsimetrico con
+  k=2 explora TODAS las biparticiones de 2n variables, por lo que puede encontrar
+  phi <= phi_geo (la misma o mejor solucion). Si en algun caso phi_asim > phi_geo,
+  hay un bug.
+
+Herencia: KGeometricSIAAsimetrico -> KGeometricSIAHeuristica -> KGeometricSIA
+  -> GeometricSIA -> SIA
+
+  Se hereda de KGeometricSIAHeuristica para reutilizar:
+    - _construir_tabla_transiciones(): BFS sobre el hipercubo de presentes
+    - self.caminos, self.tabla_transiciones: infraestructura de costos geometricos
+    - calcular_costos_nivel() / calcular_costo(): calculo del costo de transicion
+  Se SOBREESCRIBE completamente aplicar_estrategia() para operar sobre 2n variables.
+
+Atributos propios:
+    m_max_exhaustivo: umbral de tamano del pool (m=n_fut+n_pres) para usar
+                      enumeracion exacta. Para m>umbral usa heuristica.
+    _resultados_por_k: dict k -> {phi, grupos, dist, n_candidatos, tiempo_s}
+                       donde 'grupos' es lista de (futuros_i, presentes_i)
+                       con indices reales de nodos (listos para k_bipartir y fmt).
+    _modo_usado: "exacto" o "heuristico"
+"""
+
+import time
+from itertools import combinations
+from typing import Optional, Callable
+
+import numpy as np
+
+from src.controllers.strategies.kgeometric_heuristica import KGeometricSIAHeuristica
+from src.controllers.manager import Manager
+from src.funcs.base import emd_efecto
+from src.funcs.partitions import generar_k_particiones
+from src.funcs.format import fmt_k_particion
+from src.models.core.solution import Solution
+from src.constants.models import (
+    KGEOMETRIC_ASIMETRICO_LABEL,
+    KGEOMETRIC_ASIMETRICO_ANALYSIS_TAG,
+)
+from src.middlewares.profile import profile
+from src.constants.base import TYPE_TAG
+
+
+class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
+    """
+    KGeoMIP Asimetrico: k-particion de las 2n variables (futuros + presentes)
+    tratadas como entidades independientes.
+
+    A diferencia del enfoque simetrico, aqui el futuro J(t+1) y el presente j(t)
+    de un mismo nodo j pueden quedar en grupos distintos. Esto genera S(m,k)
+    candidatos donde m = len(indices_ncubos) + len(dims_ncubos).
+
+    Para m <= m_max_exhaustivo: enumeracion exacta de todos los S(m,k) candidatos.
+    Para m > m_max_exhaustivo: heuristica geometrica basada en tabla_transiciones.
+
+    La heuristica combina costos de variables futuras (extraidos directamente de
+    tabla_transiciones) con costos de variables presentes (calculados como
+    sensibilidad promedio de los futuros a cada presente via datos del n-cubo).
+    Los 2n costos se ordenan y se generan candidatos por cortes en ese ranking.
+
+    Args:
+        m_max_exhaustivo: Umbral de tamano del pool m=n_fut+n_pres para exacto.
+                          Default 8 (m=8 => n=4, S(8,3)~966, manejable).
+        m_max_candidatos: Limite de candidatos por k en modo heuristico. Default 2000.
+        Resto: identicos a KGeometricSIAHeuristica.
+    """
+
+    def __init__(
+        self,
+        gestor: Manager,
+        k_max: int = 4,
+        k_min: int = 2,
+        m_max_exhaustivo: int = 8,
+        m_max_candidatos: int = 2000,
+        decay_fn: Optional[Callable] = None,
+        parallel: bool = True,
+        dist_fn=None,
+    ):
+        super().__init__(
+            gestor,
+            k_max=k_max,
+            k_min=k_min,
+            n_max_exhaustivo=m_max_exhaustivo,
+            m_max_candidatos=m_max_candidatos,
+            decay_fn=decay_fn,
+            parallel=parallel,
+            dist_fn=dist_fn,
+        )
+        self.m_max_exhaustivo = m_max_exhaustivo
+
+    # ── Conversiones de representacion ────────────────────────────────────────
+
+    def _particion_pool_a_grupos(
+        self,
+        particion: list[list[int]],
+        indices_ncubos: np.ndarray,
+        dims_ncubos: np.ndarray,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """
+        Convierte una particion de pool-indices a lista de (futuros, presentes).
+
+        El pool codifica las 2n variables como:
+          pool[0..n_fut-1]       -> indices_ncubos (variables futuras)
+          pool[n_fut..m-1]       -> dims_ncubos    (variables presentes)
+
+        Cada grupo de pool-indices se divide en futures e indices de dims.
+        Los arrays resultantes contienen indices reales de nodos (no posiciones
+        en el pool), listos para pasarse a k_bipartir y fmt_k_particion.
+
+        Si un grupo tiene futuros vacios: k_bipartir lo maneja (ninguna caja
+        se asigna a ese grupo; sus presentes no son vistos por ningun futuro).
+        Si un grupo tiene presentes vacios: esa caja marginaliza sobre todos
+        sus dims actuales (equivale a "ve ningun presente").
+        """
+        n_fut = len(indices_ncubos)
+        grupos = []
+        for grupo_pool in particion:
+            fut_pos = [v for v in grupo_pool if v < n_fut]
+            pres_pos = [v - n_fut for v in grupo_pool if v >= n_fut]
+            futuros = (
+                indices_ncubos[np.array(fut_pos, dtype=int)]
+                if fut_pos
+                else np.array([], dtype=np.int8)
+            )
+            presentes = (
+                dims_ncubos[np.array(pres_pos, dtype=int)]
+                if pres_pos
+                else np.array([], dtype=np.int8)
+            )
+            grupos.append((futuros, presentes))
+        return grupos
+
+    # ── Costos de variables presentes ─────────────────────────────────────────
+
+    def _costos_presentes(self) -> list[float]:
+        """
+        Calcula el costo de cada variable presente como la sensibilidad promedio
+        de los futuros a dicha variable.
+
+        Para la variable presente p (posicion axis en dims_ncubos):
+          costo_p = mean_j |diff_axis P(J_j=0 | V_t=*)|
+
+        Donde diff_axis es la diferencia al variar p de 0 a 1, promediada
+        sobre todas las combinaciones de los demas presentes (np.diff(...).mean()).
+        Promedia luego sobre todos los futuros j.
+
+        Estos costos se usan en el modo heuristico para rankear las n_pres
+        variables presentes junto con las n_fut futuras (que tienen costos
+        directos de tabla_transiciones).
+        """
+        dims_ncubos = self.sia_subsistema.dims_ncubos
+        costos = []
+        for p_idx, p in enumerate(dims_ncubos):
+            axis = int(np.where(dims_ncubos == p)[0][0])
+            total = sum(
+                float(np.abs(np.diff(cube.data, axis=axis)).mean())
+                for cube in self.sia_subsistema.ncubos
+            )
+            costos.append(total / len(self.sia_subsistema.ncubos))
+        return costos
+
+    # ── Generacion de candidatos heuristicos ──────────────────────────────────
+
+    def _generar_candidatos_asimetrico(
+        self,
+        m: int,
+        k: int,
+        indices_ncubos: np.ndarray,
+        dims_ncubos: np.ndarray,
+        costos_presentes: list[float],
+    ) -> list[list[list[int]]]:
+        """
+        Genera candidatos de k-particion del pool de m variables guiados por costos.
+
+        Combina costos de los n_fut futuros (de tabla_transiciones) con costos de
+        los n_pres presentes (_costos_presentes) en un vector de longitud m.
+        Genera candidatos por cortes en el ranking de ese vector.
+
+        Estrategia 1: cortes en el ranking del estado final (BFS completo).
+        Estrategia 2: para cada nivel BFS, combina costos futuros del nivel con
+                      costos presentes fijos para enriquecer la cobertura.
+
+        Genera todas las C(m-1, k-1) particiones por cortes en cada ranking.
+        Si el total supera m_max_candidatos se trunca aleatoriamente.
+
+        Los candidatos se representan como listas de grupos de pool-indices
+        (0..m-1), canonicos con el pool-indice 0 en el primer grupo.
+        """
+        n_fut = len(indices_ncubos)
+
+        def _ranking_combined(costos_fut: list, costos_pres: list) -> list[int]:
+            costos_all = list(costos_fut) + list(costos_pres)
+            return list(np.argsort(costos_all))
+
+        def _agregar_cortes(ranking: list[int]) -> None:
+            for cortes in combinations(range(1, m), k - 1):
+                grupos: list[frozenset] = []
+                prev = 0
+                for c in sorted(cortes):
+                    grupos.append(frozenset(ranking[prev:c]))
+                    prev = c
+                grupos.append(frozenset(ranking[prev:]))
+                if all(len(g) > 0 for g in grupos):
+                    candidatos_set.add(frozenset(grupos))
+
+        candidatos_set: set[frozenset] = set()
+
+        # Estrategia 1: costo del estado final
+        key_final = (tuple(self.caminos[0][0]), tuple(self.estado_final))
+        costos_fut_final = self.tabla_transiciones.get(
+            key_final, [0.0] * n_fut
+        )
+        _agregar_cortes(_ranking_combined(costos_fut_final, costos_presentes))
+
+        # Estrategia 2: estados BFS intermedios
+        mitad = max(1, len(self.caminos) // 2)
+        for nivel in range(1, mitad + 1):
+            for estado in self.caminos.get(nivel, []):
+                key = (tuple(self.caminos[0][0]), tuple(estado))
+                costos_fut_nivel = self.tabla_transiciones.get(key)
+                if costos_fut_nivel is not None:
+                    _agregar_cortes(_ranking_combined(costos_fut_nivel, costos_presentes))
+
+        # Limitar si excede m_max_candidatos
+        if len(candidatos_set) > self.m_max_candidatos:
+            import random
+            candidatos_set = set(
+                random.sample(sorted(candidatos_set, key=str), self.m_max_candidatos)
+            )
+
+        # Convertir a listas canonicas (pool-indice 0 en primer grupo)
+        result: list[list[list[int]]] = []
+        for frozen in candidatos_set:
+            grupos = [sorted(list(g)) for g in frozen]
+            for i, g in enumerate(grupos):
+                if 0 in g:
+                    grupos[0], grupos[i] = grupos[i], grupos[0]
+                    break
+            result.append(grupos)
+
+        return result
+
+    # ── Estrategia principal ──────────────────────────────────────────────────
+
+    @profile(context={TYPE_TAG: KGEOMETRIC_ASIMETRICO_ANALYSIS_TAG})
+    def aplicar_estrategia(
+        self,
+        condicion: str,
+        alcance: str,
+        mecanismo: str,
+        tpm: np.ndarray,
+    ):
+        """
+        Encuentra la k-particion asimetrica optima (minima phi) para k en {k_min,...,k_max}.
+
+        Flujo exacto (m <= m_max_exhaustivo):
+          1. Construir pool de m = n_fut + n_pres variables.
+          2. Enumerar todos los S(m,k) candidatos con generar_k_particiones(m,k).
+          3. Para cada candidato: convertir pool -> grupos (futuros,presentes),
+             llamar k_bipartir, calcular phi con emd_efecto.
+          4. Retornar la particion de menor phi global.
+
+        Flujo heuristico (m > m_max_exhaustivo):
+          1. Construir tabla_transiciones via BFS (mismo que KGeoMIPHeuristica).
+          2. Calcular costos de variables presentes (_costos_presentes).
+          3. Generar candidatos por cortes en ranking combinado de 2n costos.
+          4. Evaluar phi para cada candidato.
+
+        Nota sobre grupos con futuros vacios:
+          k_bipartir maneja correctamente grupos con futuros=[]: itera sobre
+          todas las cajas y cada una encuentra su entrada en presentes_por_indice
+          (ya que la particion S(m,k) cubre todos los pool-indices incluyendo los
+          n_fut futuros). Los presentes de ese grupo simplemente no son vistos
+          por ninguna caja.
+
+        _resultados_por_k[k]["grupos"] almacena la lista de (futuros_i, presentes_i)
+        con indices reales de nodos, lista para formateado con fmt_k_particion.
+        """
+        self.sia_preparar_subsistema(condicion, alcance, mecanismo, tpm)
+        self._flat_data = [ncubo.data.ravel() for ncubo in self.sia_subsistema.ncubos]
+        self._setup_dist_fn()
+
+        indices_ncubos = self.sia_subsistema.indices_ncubos
+        dims_ncubos = self.sia_subsistema.dims_ncubos
+        n_fut = len(indices_ncubos)
+        n_pres = len(dims_ncubos)
+        m = n_fut + n_pres
+
+        if m < 2:
+            raise ValueError(
+                f"KGeoMIPAsimetrico requiere m >= 2 (n_fut={n_fut}, n_pres={n_pres})."
+            )
+
+        mejor_phi: float = float("inf")
+        mejor_grupos: list = []
+        mejor_dist = None
+        self._resultados_por_k = {}
+
+        if m <= self.m_max_exhaustivo:
+            # ── Modo exacto: enumerar todos los S(m,k) candidatos ─────────────
+            self._modo_usado = "exacto"
+            for k in range(self.k_min, min(self.k_max, m) + 1):
+                mejor_phi_k: float = float("inf")
+                mejor_grupos_k: list = []
+                mejor_dist_k = None
+                n_cand_k = 0
+                t0_k = time.time()
+
+                for particion in generar_k_particiones(m, k):
+                    grupos = self._particion_pool_a_grupos(
+                        particion, indices_ncubos, dims_ncubos
+                    )
+                    dist = self.sia_subsistema.k_bipartir(grupos).distribucion_marginal()
+                    phi = emd_efecto(dist, self.sia_dists_marginales)
+                    n_cand_k += 1
+
+                    if phi < mejor_phi_k:
+                        mejor_phi_k = phi
+                        mejor_grupos_k = grupos
+                        mejor_dist_k = dist
+                    if phi < mejor_phi:
+                        mejor_phi = phi
+                        mejor_grupos = grupos
+                        mejor_dist = dist
+
+                self._resultados_por_k[k] = {
+                    "phi": mejor_phi_k,
+                    "grupos": mejor_grupos_k,
+                    "dist": mejor_dist_k,
+                    "n_candidatos": n_cand_k,
+                    "tiempo_s": round(time.time() - t0_k, 6),
+                }
+
+        else:
+            # ── Modo heuristico: costos combinados de 2n variables ────────────
+            self._modo_usado = "heuristico"
+            self._construir_tabla_transiciones()
+            costos_pres = self._costos_presentes()
+
+            for k in range(self.k_min, min(self.k_max, m) + 1):
+                mejor_phi_k: float = float("inf")
+                mejor_grupos_k: list = []
+                mejor_dist_k = None
+                t0_k = time.time()
+
+                candidatos_pool = self._generar_candidatos_asimetrico(
+                    m, k, indices_ncubos, dims_ncubos, costos_pres
+                )
+
+                for particion in candidatos_pool:
+                    grupos = self._particion_pool_a_grupos(
+                        particion, indices_ncubos, dims_ncubos
+                    )
+                    dist = self.sia_subsistema.k_bipartir(grupos).distribucion_marginal()
+                    phi = emd_efecto(dist, self.sia_dists_marginales)
+
+                    if phi < mejor_phi_k:
+                        mejor_phi_k = phi
+                        mejor_grupos_k = grupos
+                        mejor_dist_k = dist
+                    if phi < mejor_phi:
+                        mejor_phi = phi
+                        mejor_grupos = grupos
+                        mejor_dist = dist
+
+                self._resultados_por_k[k] = {
+                    "phi": mejor_phi_k,
+                    "grupos": mejor_grupos_k,
+                    "dist": mejor_dist_k,
+                    "n_candidatos": len(candidatos_pool),
+                    "tiempo_s": round(time.time() - t0_k, 6),
+                }
+
+        self._n_candidatos_evaluados = sum(
+            d["n_candidatos"] for d in self._resultados_por_k.values()
+        )
+
+        return Solution(
+            estrategia=KGEOMETRIC_ASIMETRICO_LABEL,
+            perdida=mejor_phi,
+            distribucion_subsistema=self.sia_dists_marginales,
+            distribucion_particion=mejor_dist,
+            tiempo_total=time.time() - self.sia_tiempo_inicio,
+            particion=fmt_k_particion(mejor_grupos) if mejor_grupos else "",
+        )
+
+
+# Alias oficial
+KGeoMIPAsimetrico = KGeometricSIAAsimetrico
