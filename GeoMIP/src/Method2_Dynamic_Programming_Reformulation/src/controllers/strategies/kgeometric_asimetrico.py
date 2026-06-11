@@ -200,16 +200,21 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
         """
         Genera candidatos de k-particion del pool de m variables guiados por costos.
 
-        Combina costos de los n_fut futuros (de tabla_transiciones) con costos de
-        los n_pres presentes (_costos_presentes) en un vector de longitud m.
-        Genera candidatos por cortes en el ranking de ese vector.
+        Separa estrictamente dos conjuntos:
 
-        Estrategia 1: cortes en el ranking del estado final (BFS completo).
-        Estrategia 2: para cada nivel BFS, combina costos futuros del nivel con
-                      costos presentes fijos para enriquecer la cobertura.
+        candidatos_obligatorios — singleton cuts (solo k=2).
+          Siempre se evaluan en su totalidad. NUNCA entran al conteo del cap.
+          Son ~2*n_fut candidatos: aislar un futuro solo, o un nodo completo
+          (futuro+presente), del resto del sistema.
 
-        Genera todas las C(m-1, k-1) particiones por cortes en cada ranking.
-        Si el total supera m_max_candidatos se trunca aleatoriamente.
+        candidatos_opcionales — estrategias 1 y 2 (cortes en rankings de costos).
+          Solo a este conjunto se le aplica el cap m_max_candidatos.
+          El truncado es DETERMINISTA: se ordenan por clave estructural estable
+          (no depende de hash ni PYTHONHASHSEED) y se toman los primeros N.
+          No se usa random ni ninguna semilla.
+
+        Conjunto final evaluado = candidatos_obligatorios
+                                  U primeros m_max_candidatos de candidatos_opcionales.
 
         Los candidatos se representan como listas de grupos de pool-indices
         (0..m-1), canonicos con el pool-indice 0 en el primer grupo.
@@ -220,7 +225,7 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
             costos_all = list(costos_fut) + list(costos_pres)
             return list(np.argsort(costos_all))
 
-        def _agregar_cortes(ranking: list[int]) -> None:
+        def _agregar_cortes(ranking: list[int], destino: set) -> None:
             for cortes in combinations(range(1, m), k - 1):
                 grupos: list[frozenset] = []
                 prev = 0
@@ -229,36 +234,70 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
                     prev = c
                 grupos.append(frozenset(ranking[prev:]))
                 if all(len(g) > 0 for g in grupos):
-                    candidatos_set.add(frozenset(grupos))
+                    destino.add(frozenset(grupos))
 
-        candidatos_set: set[frozenset] = set()
+        def _clave_estable(particion: frozenset) -> tuple:
+            # Ordena grupos y elementos dentro de cada grupo; completamente
+            # independiente de hash y PYTHONHASHSEED.
+            return tuple(sorted(tuple(sorted(g)) for g in particion))
 
-        # Estrategia 1: costo del estado final
+        # ── Candidatos garantizados (singletons, k=2) ─────────────────────────
+        candidatos_obligatorios: set[frozenset] = set()
+        if k == 2:
+            todos = frozenset(range(m))
+            nodo_a_pool_pres: dict[int, int] = {
+                int(dims_ncubos[p]): n_fut + p for p in range(len(dims_ncubos))
+            }
+            for j in range(n_fut):
+                singleton_fut = frozenset({j})
+                if len(singleton_fut) < m:
+                    candidatos_obligatorios.add(
+                        frozenset({singleton_fut, todos - singleton_fut})
+                    )
+                nodo_real = int(indices_ncubos[j])
+                if nodo_real in nodo_a_pool_pres:
+                    singleton_nodo = frozenset({j, nodo_a_pool_pres[nodo_real]})
+                    if len(singleton_nodo) < m:
+                        candidatos_obligatorios.add(
+                            frozenset({singleton_nodo, todos - singleton_nodo})
+                        )
+
+        # ── Candidatos opcionales (estrategias 1 y 2) ─────────────────────────
+        candidatos_opcionales: set[frozenset] = set()
+
         key_final = (tuple(self.caminos[0][0]), tuple(self.estado_final))
-        costos_fut_final = self.tabla_transiciones.get(
-            key_final, [0.0] * n_fut
+        costos_fut_final = self.tabla_transiciones.get(key_final, [0.0] * n_fut)
+        _agregar_cortes(
+            _ranking_combined(costos_fut_final, costos_presentes), candidatos_opcionales
         )
-        _agregar_cortes(_ranking_combined(costos_fut_final, costos_presentes))
 
-        # Estrategia 2: estados BFS intermedios
         mitad = max(1, len(self.caminos) // 2)
         for nivel in range(1, mitad + 1):
             for estado in self.caminos.get(nivel, []):
                 key = (tuple(self.caminos[0][0]), tuple(estado))
                 costos_fut_nivel = self.tabla_transiciones.get(key)
                 if costos_fut_nivel is not None:
-                    _agregar_cortes(_ranking_combined(costos_fut_nivel, costos_presentes))
+                    _agregar_cortes(
+                        _ranking_combined(costos_fut_nivel, costos_presentes),
+                        candidatos_opcionales,
+                    )
 
-        # Limitar si excede m_max_candidatos
-        if len(candidatos_set) > self.m_max_candidatos:
-            import random
-            candidatos_set = set(
-                random.sample(sorted(candidatos_set, key=str), self.m_max_candidatos)
+        # Excluir de opcionales los que ya son obligatorios (evita doble evaluacion)
+        candidatos_opcionales -= candidatos_obligatorios
+
+        # Cap determinista: ordenar por clave estable y tomar los primeros N.
+        # Sin aleatoriedad: mismo input => mismo subset en cualquier corrida.
+        if len(candidatos_opcionales) > self.m_max_candidatos:
+            candidatos_opcionales = set(
+                sorted(candidatos_opcionales, key=_clave_estable)[: self.m_max_candidatos]
             )
+
+        # ── Conjunto final ─────────────────────────────────────────────────────
+        candidatos_final = candidatos_obligatorios | candidatos_opcionales
 
         # Convertir a listas canonicas (pool-indice 0 en primer grupo)
         result: list[list[list[int]]] = []
-        for frozen in candidatos_set:
+        for frozen in candidatos_final:
             grupos = [sorted(list(g)) for g in frozen]
             for i, g in enumerate(grupos):
                 if 0 in g:
