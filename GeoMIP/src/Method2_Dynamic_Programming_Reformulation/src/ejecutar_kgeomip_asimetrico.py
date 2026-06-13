@@ -81,8 +81,9 @@ from src.funcs.format import fmt_k_particion
 profiler_manager.enabled = False
 
 # ── Configuracion base ─────────────────────────────────────────────────────────
-M_MAX_EXACTO = int(os.getenv("KGEOMIP_M_MAX_EXACTO", "8"))
-TIMEOUT_S    = int(os.getenv("KGEOMIP_TIMEOUT_S",    "86400"))  # 24h default
+M_MAX_EXACTO      = int(os.getenv("KGEOMIP_M_MAX_EXACTO",      "8"))
+M_MAX_CANDIDATOS  = int(os.getenv("KGEOMIP_M_MAX_CANDIDATOS", "2000"))
+TIMEOUT_S         = int(os.getenv("KGEOMIP_TIMEOUT_S",        "86400"))  # 24h default
 INPUT_XLSX   = Path(os.getenv(
     "KGEOMIP_INPUT_XLSX",
     str(GEOMIP_ROOT / "tests" / "PruebasK-Particiones.xlsx"),
@@ -153,16 +154,17 @@ def _formatear_particion_asimetrica(grupos: list) -> str | None:
 # ── Worker de multiprocessing ─────────────────────────────────────────────────
 
 def _worker(
-    estado_inicial: str,
-    condiciones:    str,
-    alcance:        str,
-    mecanismo:      str,
-    tpm:            "np.ndarray",
-    pagina:         str,
-    m_max_exacto:   int,
-    k_min:          int,
-    k_max:          int,
-    cola:           multiprocessing.Queue,
+    estado_inicial:   str,
+    condiciones:      str,
+    alcance:          str,
+    mecanismo:        str,
+    tpm:              "np.ndarray",
+    pagina:           str,
+    m_max_exacto:     int,
+    k_min:            int,
+    k_max:            int,
+    cola:             multiprocessing.Queue,
+    m_max_candidatos: int = 2000,
 ) -> None:
     """Proceso hijo: crea KGeoMIPAsimetrico, ejecuta y pone resultados en la cola."""
     try:
@@ -173,6 +175,7 @@ def _worker(
             k_max=k_max,
             k_min=k_min,
             m_max_exhaustivo=m_max_exacto,
+            m_max_candidatos=m_max_candidatos,
             decay_fn=decay_exponencial,
         )
         sia.aplicar_estrategia(condiciones, alcance, mecanismo, tpm)
@@ -198,14 +201,15 @@ def _worker(
 # ── Ejecutor principal ────────────────────────────────────────────────────────
 
 def ejecutar_desde_excel(
-    sheet_name:   str,
-    inicio:       int = 0,
-    cantidad:     int = 50,
-    k_min:        int = 2,
-    k_max:        int = 5,
-    timeout_s:    int = TIMEOUT_S,
-    m_max_exacto: int = M_MAX_EXACTO,
-    etiqueta:     str = "",
+    sheet_name:       str,
+    inicio:           int = 0,
+    cantidad:         int = 50,
+    k_min:            int = 2,
+    k_max:            int = 5,
+    timeout_s:        int = TIMEOUT_S,
+    m_max_exacto:     int = M_MAX_EXACTO,
+    m_max_candidatos: int = M_MAX_CANDIDATOS,
+    etiqueta:         str = "",
 ) -> None:
     n, variante = parsear_hoja(sheet_name)
     estado_inicial, todos_casos = leer_excel(INPUT_XLSX, sheet_name)
@@ -222,6 +226,7 @@ def ejecutar_desde_excel(
     print(f"Estado inicial: {estado_inicial}  n={len(estado_inicial)}  m_sistema_max={m_sistema}")
     print(f"TPM: {tpm_path}")
     print(f"Pruebas: {inicio + 1} -> {inicio + len(filas)}")
+    print(f"Candidatos heuristicos max: {m_max_candidatos}")
     print(f"Timeout por prueba: {timeout_s}s ({timeout_s/3600:.1f}h)")
     if m_max_exacto >= 999:
         from src.funcs.partitions import contar_stirling
@@ -241,7 +246,8 @@ def ejecutar_desde_excel(
         proceso = multiprocessing.Process(
             target=_worker,
             args=(estado_inicial, condiciones, alcance, mecanismo,
-                  tpm, variante, m_max_exacto, k_min, k_max, cola),
+                  tpm, variante, m_max_exacto, k_min, k_max, cola,
+                  m_max_candidatos),
         )
         t_ini = time.perf_counter()
         proceso.start()
@@ -254,6 +260,7 @@ def ejecutar_desde_excel(
             proceso.join()
             por_k_data, modo, error = {}, "timeout", f"Timeout ({timeout_s}s)"
         elif cola.empty():
+            print(f"  [DEBUG] exitcode={proceso.exitcode}")
             por_k_data, modo, error = {}, "error", "Proceso termino sin resultado"
         else:
             res        = cola.get()
@@ -300,10 +307,13 @@ def ejecutar_desde_excel(
     df         = pd.DataFrame(resultados)
     hoja_clean = sheet_name.strip().replace(" ", "_")
     ks_suffix  = f"_k{k_min}" if k_min == k_max else f"_k{k_min}-{k_max}"
+    # Solo agrega sufijo de rango cuando NO es la corrida completa por defecto (inicio=0, cantidad=50).
+    # Asi el archivo sin sufijo de rango es exclusivo para las 50 pruebas completas.
+    rango_suffix = f"_p{inicio + 1}-{inicio + cantidad}" if (inicio != 0 or cantidad != 50) else ""
     eta_suffix = f"_{etiqueta}" if etiqueta else ""
     ruta_salida = (
         GEOMIP_ROOT / "results"
-        / f"resultados_kgeomip_asimetrico_{hoja_clean}{ks_suffix}{eta_suffix}.xlsx"
+        / f"resultados_kgeomip_asimetrico_{hoja_clean}{ks_suffix}{rango_suffix}{eta_suffix}.xlsx"
     )
     ruta_salida.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(ruta_salida, index=False)
@@ -326,6 +336,9 @@ def main() -> None:
                         help=f"Timeout por prueba en segundos (default {TIMEOUT_S})")
     parser.add_argument("--exacto", action="store_true",
                         help="Forzar enumeracion exhaustiva S(m,k) para todos los casos.")
+    parser.add_argument("--m_max_candidatos", type=int, default=M_MAX_CANDIDATOS,
+                        help=f"Limite de candidatos heuristicos por k (default {M_MAX_CANDIDATOS}). "
+                             "Reducir (ej. 500) alivia presion de RAM en sistemas grandes (n>=20).")
     parser.add_argument("--etiqueta", type=str, default="",
                         help="Sufijo adicional para el nombre del archivo de salida")
 
@@ -356,14 +369,15 @@ def main() -> None:
     etiqueta     = "exacto" if args.exacto else args.etiqueta
 
     ejecutar_desde_excel(
-        sheet_name   = args.hoja,
-        inicio       = args.inicio,
-        cantidad     = args.cantidad,
-        k_min        = k_min,
-        k_max        = k_max,
-        timeout_s    = args.timeout,
-        m_max_exacto = m_max_exacto,
-        etiqueta     = etiqueta,
+        sheet_name       = args.hoja,
+        inicio           = args.inicio,
+        cantidad         = args.cantidad,
+        k_min            = k_min,
+        k_max            = k_max,
+        timeout_s        = args.timeout,
+        m_max_exacto     = m_max_exacto,
+        m_max_candidatos = args.m_max_candidatos,
+        etiqueta         = etiqueta,
     )
 
 

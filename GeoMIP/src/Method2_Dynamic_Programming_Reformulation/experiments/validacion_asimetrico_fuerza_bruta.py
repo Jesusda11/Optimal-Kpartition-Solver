@@ -63,7 +63,7 @@ from src.funcs.partitions import generar_k_particiones, contar_stirling
 profiler_manager.enabled = False
 
 # ── Configuracion ─────────────────────────────────────────────────────────────
-K_MAX = 3  # S(8,4)=7770 hace n=4 k=4 muy lento en BF; con k_max=3 es rapido
+K_MAX = 5  # S(8,5)=1050, S(8,4)=1701 — manejable; BF sobre 5^8=390625 asignaciones es rapido
 
 CASOS: list[tuple] = [
     # (id, pagina, estado_ini, condicion, alcance, mecanismo)
