@@ -125,7 +125,8 @@ class KGeometricSIAHeuristica(KGeometricSIA):
           de los nodos comunes y genera todos los C(n-1, k-1) cortes para ese
           estado. Esto aumenta cobertura para n grandes.
 
-        Si el total supera m_max_candidatos se trunca aleatoriamente.
+        Si el total supera m_max_candidatos se trunca de forma DETERMINISTA
+        (orden por clave estable, sin aleatoriedad ni dependencia de PYTHONHASHSEED).
         """
         indices_ncubos = self.sia_subsistema.indices_ncubos
         # Posiciones de comunes dentro de indices_ncubos (para indexar costos)
@@ -146,6 +147,11 @@ class KGeometricSIAHeuristica(KGeometricSIA):
                 if all(len(g) > 0 for g in grupos):
                     candidatos_set.add(frozenset(grupos))
 
+        def _clave_estable(particion: frozenset) -> tuple:
+            # Ordena grupos y elementos dentro de cada grupo; completamente
+            # independiente de hash y PYTHONHASHSEED.
+            return tuple(sorted(tuple(sorted(g)) for g in particion))
+
         candidatos_set: set[frozenset] = set()
 
         # Estrategia 1: cortes en ranking del nivel final
@@ -162,11 +168,11 @@ class KGeometricSIAHeuristica(KGeometricSIA):
                 if costos_nivel is not None:
                     _agregar_cortes(_ranking_desde_costos(costos_nivel))
 
-        # Limitar si excede m_max_candidatos
+        # Cap determinista: ordenar por clave estable y tomar los primeros N.
+        # Sin aleatoriedad: mismo input => mismo subset en cualquier corrida.
         if len(candidatos_set) > self.m_max_candidatos:
-            import random
             candidatos_set = set(
-                random.sample(sorted(candidatos_set, key=str), self.m_max_candidatos)
+                sorted(candidatos_set, key=_clave_estable)[: self.m_max_candidatos]
             )
 
         # Convertir a listas de listas canonicas (grupo con nodo 0 primero)
