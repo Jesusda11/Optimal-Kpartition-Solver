@@ -30,17 +30,19 @@ GEOMETRIC_LABEL: str = "Geometric"
 GEOMETRIC_STRAREGY_TAG: str = f"{GEOMETRIC_LABEL}_strategy"
 GEOMETRIC_ANALYSIS_TAG: str = f"{GEOMETRIC_LABEL}_analysis"
 
-# K-Geometric
-KGEOMETRIC_LABEL: str = "KGeometric"
+# K-Geometric (nomenclatura oficial: KGeoMIP). El identificador de la constante se
+# conserva (KGEOMETRIC_*_LABEL) por compatibilidad de imports; solo cambia el VALOR
+# a "KGeoMIP*" para que la columna 'estrategia' de los Excel use el nombre oficial.
+KGEOMETRIC_LABEL: str = "KGeoMIP"
 KGEOMETRIC_STRAREGY_TAG: str = f"{KGEOMETRIC_LABEL}_strategy"
 KGEOMETRIC_ANALYSIS_TAG: str = f"{KGEOMETRIC_LABEL}_analysis"
 
-# K-Geometric Heuristica
-KGEOMETRIC_HEURISTICA_LABEL: str = "KGeometricHeuristica"
+# K-Geometric Heuristica (nomenclatura oficial: KGeoMIPHeuristica)
+KGEOMETRIC_HEURISTICA_LABEL: str = "KGeoMIPHeuristica"
 KGEOMETRIC_HEURISTICA_STRAREGY_TAG: str = f"{KGEOMETRIC_HEURISTICA_LABEL}_strategy"
 KGEOMETRIC_HEURISTICA_ANALYSIS_TAG: str = f"{KGEOMETRIC_HEURISTICA_LABEL}_analysis"
 
-# K-Geometric Asimetrico
-KGEOMETRIC_ASIMETRICO_LABEL: str = "KGeometricAsimetrico"
+# K-Geometric Asimetrico (nomenclatura oficial: KGeoMIPAsimetrico)
+KGEOMETRIC_ASIMETRICO_LABEL: str = "KGeoMIPAsimetrico"
 KGEOMETRIC_ASIMETRICO_STRAREGY_TAG: str = f"{KGEOMETRIC_ASIMETRICO_LABEL}_strategy"
 KGEOMETRIC_ASIMETRICO_ANALYSIS_TAG: str = f"{KGEOMETRIC_ASIMETRICO_LABEL}_analysis"

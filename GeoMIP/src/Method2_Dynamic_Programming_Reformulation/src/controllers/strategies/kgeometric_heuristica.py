@@ -20,7 +20,7 @@ Complejidad heuristica:
 
 Parametro m_max_candidatos limita el total si C(n-1,k-1) es muy grande.
 
-Alias oficial: KGeoMIPHeuristica = KGeometricSIAHeuristica
+Nomenclatura oficial: clase principal KGeoMIPHeuristica (alias retrocompat: KGeometricSIAHeuristica)
 """
 
 import time
@@ -43,7 +43,7 @@ from src.middlewares.profile import profile
 from src.constants.base import TYPE_TAG
 
 
-class KGeometricSIAHeuristica(KGeometricSIA):
+class KGeoMIPHeuristica(KGeometricSIA):
     """
     KGeoMIP Simetrico con heuristica geometrica para subsistemas grandes.
 
@@ -71,6 +71,21 @@ class KGeometricSIAHeuristica(KGeometricSIA):
         parallel: bool = True,
         dist_fn=None,
     ):
+        """
+        Inicializa la estrategia KGeoMIPHeuristica (simetrica con heuristica).
+
+        Args:
+            gestor (Manager): Estado inicial y pagina de la red.
+            k_max (int): Maximo numero de grupos a evaluar (inclusive). Default 4.
+            k_min (int): Minimo numero de grupos; se fuerza a >= 2. Default 2.
+            n_max_exhaustivo (int): Umbral de nodos balanceados para usar exacto vs
+                heuristico. n <= umbral -> enumeracion S(n,k); n > umbral -> heuristica.
+                Default 6.
+            m_max_candidatos (int): Cap de candidatos por k en modo heuristico. Default 2000.
+            decay_fn (Optional[Callable]): Funcion de decrecimiento gamma (GeometricSIA).
+            parallel (bool): Paralelizacion BFS interna (GeometricSIA).
+            dist_fn: Metrica de distancia para gamma (GeometricSIA).
+        """
         super().__init__(
             gestor,
             k_max=k_max,
@@ -133,10 +148,20 @@ class KGeometricSIAHeuristica(KGeometricSIA):
         comunes_pos = [int(np.where(indices_ncubos == c)[0][0]) for c in comunes]
 
         def _ranking_desde_costos(costos_all: list) -> list[int]:
+            """Ordena las posiciones 0..n-1 de los nodos comunes por costo ascendente.
+
+            costos_all viene indexado por indices_ncubos; se extraen solo las
+            posiciones de los nodos balanceados (comunes_pos) y se devuelve el orden
+            (argsort) que sirve de base para los cortes.
+            """
             costos_comunes = [costos_all[p] for p in comunes_pos]
             return list(np.argsort(costos_comunes))
 
         def _agregar_cortes(ranking: list[int]) -> None:
+            """Genera todas las C(n-1, k-1) k-particiones por cortes contiguos en
+            `ranking` y las acumula (dedup) en candidatos_set como frozensets de
+            grupos. Descarta cortes que dejen algun grupo vacio.
+            """
             for cortes in combinations(range(1, n), k - 1):
                 grupos: list[frozenset] = []
                 prev = 0
@@ -148,8 +173,11 @@ class KGeometricSIAHeuristica(KGeometricSIA):
                     candidatos_set.add(frozenset(grupos))
 
         def _clave_estable(particion: frozenset) -> tuple:
-            # Ordena grupos y elementos dentro de cada grupo; completamente
-            # independiente de hash y PYTHONHASHSEED.
+            """Clave de orden total determinista para una particion (frozenset de
+            grupos): ordena los elementos de cada grupo y luego los grupos entre si.
+            Independiente de hash y de PYTHONHASHSEED, por lo que el truncado por cap
+            es reproducible entre procesos.
+            """
             return tuple(sorted(tuple(sorted(g)) for g in particion))
 
         candidatos_set: set[frozenset] = set()
@@ -326,5 +354,6 @@ class KGeometricSIAHeuristica(KGeometricSIA):
         )
 
 
-# Alias oficial
-KGeoMIPHeuristica = KGeometricSIAHeuristica
+# Nomenclatura oficial: la clase principal es KGeoMIPHeuristica.
+# KGeometricSIAHeuristica se conserva como alias de retrocompatibilidad.
+KGeometricSIAHeuristica = KGeoMIPHeuristica

@@ -70,6 +70,18 @@ class KQNodes(QNodes):
     """
 
     def __init__(self, tpm: np.ndarray, k_min: int = 2, k_max: int = 2):
+        """
+        Inicializa la estrategia KQNodes.
+
+        Args:
+            tpm (np.ndarray): Matriz de Probabilidad de Transicion del sistema
+                completo (convencion del arbol QNodes: SIA(tpm), no gestor).
+            k_min (int): k minimo a evaluar; se fuerza a >= 2. Default 2.
+            k_max (int): k maximo a evaluar (inclusive). Default 2.
+
+        Precondicion: el subsistema se prepara despues, en aplicar_estrategia, que
+        ademas inicializa la memoria del motor de Queyranne heredado de QNodes.
+        """
         super().__init__(tpm)
         self.k_min: int = max(2, k_min)
         self.k_max: int = k_max

@@ -33,7 +33,7 @@ from src.middlewares.profile import profile
 from src.constants.base import TYPE_TAG
 
 
-class KGeometricSIA(GeometricSIA):
+class KGeoMIP(GeometricSIA):
     """
     Extension de GeometricSIA a k-particiones (k = 2, ..., k_max).
 
@@ -59,6 +59,18 @@ class KGeometricSIA(GeometricSIA):
         parallel: bool = True,
         dist_fn=None,
     ):
+        """
+        Inicializa la estrategia KGeoMIP (simetrica, exacta).
+
+        Args:
+            gestor (Manager): Estado inicial y pagina de la red.
+            k_max (int): Maximo numero de grupos a evaluar (inclusive). Default 4.
+            decay_fn (Optional[Callable]): Funcion de decrecimiento gamma (GeometricSIA).
+            parallel (bool): Habilita la paralelizacion BFS interna (GeometricSIA).
+            dist_fn: Metrica de distancia para gamma (GeometricSIA).
+
+        Precondicion: el subsistema se prepara despues, en aplicar_estrategia.
+        """
         super().__init__(gestor, decay_fn=decay_fn, parallel=parallel, dist_fn=dist_fn)
         self.k_max = k_max
 
@@ -105,7 +117,7 @@ class KGeometricSIA(GeometricSIA):
 
         if n < 2:
             raise ValueError(
-                f"KGeometricSIA requiere al menos 2 nodos balanceados "
+                f"KGeoMIP requiere al menos 2 nodos balanceados "
                 f"(en alcance Y mecanismo); se encontraron {n}."
             )
 
@@ -160,7 +172,7 @@ class KGeometricSIA(GeometricSIA):
         return {k: contar_stirling(n, k) for k in range(2, min(self.k_max, n) + 1)}
 
 
-# Alias oficial conforme a la nomenclatura del proyecto K-QGMIP.
-# KGeoMIP y KGeometricSIA son exactamente la misma clase; ambos nombres
-# pueden usarse indistintamente en imports y en el manual.
-KGeoMIP = KGeometricSIA
+# Nomenclatura oficial del proyecto K-QGMIP: la clase principal es KGeoMIP.
+# KGeometricSIA se conserva como alias de retrocompatibilidad (mismo objeto de clase);
+# ambos nombres pueden usarse indistintamente en imports y en el manual.
+KGeometricSIA = KGeoMIP

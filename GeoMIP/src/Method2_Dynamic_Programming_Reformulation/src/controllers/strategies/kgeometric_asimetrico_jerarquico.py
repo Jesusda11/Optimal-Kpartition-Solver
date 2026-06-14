@@ -57,7 +57,7 @@ from src.models.core.solution import Solution
 KGEOMIP_JERARQUICO_LABEL = "KGeoMIPAsimetrico-Jerarquico"
 
 
-class KGeometricSIAAsimetricoJerarquico(KGeometricSIAAsimetrico):
+class KGeoMIPAsimetricoJerarquico(KGeometricSIAAsimetrico):
     """
     KGeoMIP Asimetrico con modo jerarquico para k-particiones en sistemas grandes.
 
@@ -271,5 +271,6 @@ class KGeometricSIAAsimetricoJerarquico(KGeometricSIAAsimetrico):
         )
 
 
-# Alias oficial
-KGeoMIPAsimetricoJerarquico = KGeometricSIAAsimetricoJerarquico
+# Nomenclatura oficial: la clase principal es KGeoMIPAsimetricoJerarquico.
+# KGeometricSIAAsimetricoJerarquico se conserva como alias de retrocompatibilidad.
+KGeometricSIAAsimetricoJerarquico = KGeoMIPAsimetricoJerarquico

@@ -69,7 +69,7 @@ from src.middlewares.profile import profile
 from src.constants.base import TYPE_TAG
 
 
-class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
+class KGeoMIPAsimetrico(KGeometricSIAHeuristica):
     """
     KGeoMIP Asimetrico: k-particion de las 2n variables (futuros + presentes)
     tratadas como entidades independientes.
@@ -104,6 +104,25 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
         parallel: bool = True,
         dist_fn=None,
     ):
+        """
+        Inicializa la estrategia KGeoMIPAsimetrico (k-particion del pool de 2n variables).
+
+        Args:
+            gestor (Manager): Estado inicial y pagina de la red.
+            k_max (int): Maximo numero de grupos a evaluar (inclusive). Default 4.
+            k_min (int): Minimo numero de grupos; se fuerza a >= 2. Default 2.
+            m_max_exhaustivo (int): Umbral del tamano del pool m=n_fut+n_pres para
+                usar exacto vs heuristico. m <= umbral -> enumeracion S(m,k);
+                m > umbral -> heuristica geometrica. Default 8.
+            m_max_candidatos (int): Cap de candidatos opcionales por k en modo
+                heuristico (los obligatorios/singletons nunca se truncan). Default 2000.
+            decay_fn (Optional[Callable]): Funcion de decrecimiento gamma (GeometricSIA).
+            parallel (bool): Paralelizacion BFS interna (GeometricSIA).
+            dist_fn: Metrica de distancia para gamma (GeometricSIA).
+
+        Nota: se reusa n_max_exhaustivo del padre pasandole m_max_exhaustivo (el
+        umbral exhaustivo del asimetrico se mide sobre el pool m, no sobre n).
+        """
         super().__init__(
             gestor,
             k_max=k_max,
@@ -222,10 +241,19 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
         n_fut = len(indices_ncubos)
 
         def _ranking_combined(costos_fut: list, costos_pres: list) -> list[int]:
+            """Ranking de los m pool-indices por costo ascendente.
+
+            Concatena costos de futuros (0..n_fut-1) y de presentes (n_fut..m-1) y
+            devuelve el orden (argsort), base sobre la que se generan los cortes.
+            """
             costos_all = list(costos_fut) + list(costos_pres)
             return list(np.argsort(costos_all))
 
         def _agregar_cortes(ranking: list[int], destino: set) -> None:
+            """Genera las C(m-1, k-1) k-particiones por cortes contiguos en `ranking`
+            (pool-indices) y las acumula (dedup) en `destino` como frozensets de
+            grupos. Descarta cortes que dejen algun grupo vacio.
+            """
             for cortes in combinations(range(1, m), k - 1):
                 grupos: list[frozenset] = []
                 prev = 0
@@ -237,8 +265,11 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
                     destino.add(frozenset(grupos))
 
         def _clave_estable(particion: frozenset) -> tuple:
-            # Ordena grupos y elementos dentro de cada grupo; completamente
-            # independiente de hash y PYTHONHASHSEED.
+            """Clave de orden total determinista para una particion (frozenset de
+            grupos): ordena elementos dentro de cada grupo y luego los grupos entre
+            si. Independiente de hash y PYTHONHASHSEED, por lo que el truncado por
+            cap es reproducible entre procesos.
+            """
             return tuple(sorted(tuple(sorted(g)) for g in particion))
 
         # ── Candidatos garantizados (singletons, k=2) ─────────────────────────
@@ -452,5 +483,6 @@ class KGeometricSIAAsimetrico(KGeometricSIAHeuristica):
         )
 
 
-# Alias oficial
-KGeoMIPAsimetrico = KGeometricSIAAsimetrico
+# Nomenclatura oficial: la clase principal es KGeoMIPAsimetrico.
+# KGeometricSIAAsimetrico se conserva como alias de retrocompatibilidad.
+KGeometricSIAAsimetrico = KGeoMIPAsimetrico
