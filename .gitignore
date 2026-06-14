@@ -59,3 +59,5 @@ build/
 # Salidas generadas en tiempo de ejecucion (profiling, logs, resolver)
 review/
 .logs/
+
+GeoMIP/data/samples/N20A.csv
