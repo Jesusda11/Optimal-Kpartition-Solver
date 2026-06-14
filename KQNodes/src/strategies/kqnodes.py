@@ -105,6 +105,7 @@ class KQNodes(QNodes):
 
         k_top = min(self.k_max, len(vertices))
         for k in range(self.k_min, k_top + 1):
+            t0_k = time.time()
             if k == 2:
                 _, phi, dist, fmt = self._biparticion_full(vertices)
                 n_eval, modo = 1, "queyranne-k2"
@@ -119,6 +120,7 @@ class KQNodes(QNodes):
                 "dist": dist,
                 "n_candidatos": n_eval,
                 "modo_usado": modo,
+                "tiempo_s": round(time.time() - t0_k, 6),
             }
             if phi < mejor_phi:
                 mejor_phi, mejor_dist, mejor_fmt = phi, dist, fmt
