@@ -43,6 +43,7 @@ import time
 import logging
 import argparse
 import multiprocessing
+from math import comb
 from pathlib import Path
 
 import numpy as np
@@ -75,6 +76,7 @@ from src.models.base.application import aplicacion
 from src.middlewares.profile import profiler_manager
 from src.controllers.manager import Manager
 from src.controllers.strategies.kgeometric_asimetrico import KGeoMIPAsimetrico
+from src.controllers.strategies.kgeometric_asimetrico_jerarquico import KGeoMIPAsimetricoJerarquico
 from src.funcs.decay import decay_exponencial
 from src.funcs.format import fmt_k_particion
 
@@ -84,6 +86,7 @@ profiler_manager.enabled = False
 M_MAX_EXACTO      = int(os.getenv("KGEOMIP_M_MAX_EXACTO",      "8"))
 M_MAX_CANDIDATOS  = int(os.getenv("KGEOMIP_M_MAX_CANDIDATOS", "2000"))
 TIMEOUT_S         = int(os.getenv("KGEOMIP_TIMEOUT_S",        "86400"))  # 24h default
+LIMITE_MEM_GB     = float(os.getenv("KGEOMIP_LIMITE_MEM_GB",  "4.0"))    # advertencia OOM
 INPUT_XLSX   = Path(os.getenv(
     "KGEOMIP_INPUT_XLSX",
     str(GEOMIP_ROOT / "tests" / "PruebasK-Particiones.xlsx"),
@@ -153,6 +156,15 @@ def _formatear_particion_asimetrica(grupos: list) -> str | None:
 
 # ── Worker de multiprocessing ─────────────────────────────────────────────────
 
+def _estimar_mem_gb(n_pres: int, m: int, k_max: int) -> float:
+    """Estima RAM necesaria para el modo directo (GB). ~700 bytes por frozenset."""
+    if m < 2 or k_max < 2:
+        return 0.0
+    bfs_estados = sum(comb(n_pres, i) for i in range(1, n_pres // 2 + 1))
+    cuts_por_estado = comb(m - 1, k_max - 1)
+    return bfs_estados * cuts_por_estado * 700 / 1e9
+
+
 def _worker(
     estado_inicial:   str,
     condiciones:      str,
@@ -165,12 +177,20 @@ def _worker(
     k_max:            int,
     cola:             multiprocessing.Queue,
     m_max_candidatos: int = 2000,
+    modo:             str = "directo",
 ) -> None:
-    """Proceso hijo: crea KGeoMIPAsimetrico, ejecuta y pone resultados en la cola."""
+    """
+    Proceso hijo: crea la estrategia asimetrica, ejecuta y pone resultados en la cola.
+
+    modo="directo"     -> KGeoMIPAsimetrico (generacion directa de candidatos)
+    modo="jerarquico"  -> KGeoMIPAsimetricoJerarquico (biparticiones sucesivas)
+    """
     try:
         aplicacion.pagina_sample_network = pagina
         gestor = Manager(estado_inicial=estado_inicial)
-        sia = KGeoMIPAsimetrico(
+
+        Clase = KGeoMIPAsimetricoJerarquico if modo == "jerarquico" else KGeoMIPAsimetrico
+        sia = Clase(
             gestor,
             k_max=k_max,
             k_min=k_min,
@@ -190,6 +210,7 @@ def _worker(
                 "particion":    particion_str,
                 "n_candidatos": datos["n_candidatos"],
                 "tiempo_s":     datos["tiempo_s"],
+                "modo_usado":   datos.get("modo_usado", sia._modo_usado),
             }
 
     except Exception as exc:
@@ -210,6 +231,7 @@ def ejecutar_desde_excel(
     m_max_exacto:     int = M_MAX_EXACTO,
     m_max_candidatos: int = M_MAX_CANDIDATOS,
     etiqueta:         str = "",
+    modo:             str = "directo",
 ) -> None:
     n, variante = parsear_hoja(sheet_name)
     estado_inicial, todos_casos = leer_excel(INPUT_XLSX, sheet_name)
@@ -223,6 +245,7 @@ def ejecutar_desde_excel(
 
     print("=" * 70)
     print(f"KGeoMIP Asimetrico — Hoja: {sheet_name}  |  {ks_label}  |  {modo_label}")
+    print(f"Modo de busqueda: {modo.upper()}")
     print(f"Estado inicial: {estado_inicial}  n={len(estado_inicial)}  m_sistema_max={m_sistema}")
     print(f"TPM: {tpm_path}")
     print(f"Pruebas: {inicio + 1} -> {inicio + len(filas)}")
@@ -242,12 +265,26 @@ def ejecutar_desde_excel(
 
         print(f"\n[{prueba_num:>3}] Alcance={alcance_str!r:<30} Mecanismo={mecanismo_str!r}")
 
+        # Advertencia de memoria para modo directo
+        if modo == "directo" and m_max_exacto < 999:
+            n_fut_est  = sum(b == "1" and c == "1" for b, c in zip(alcance,   condiciones))
+            n_pres_est = sum(b == "1" and c == "1" for b, c in zip(mecanismo, condiciones))
+            m_est      = n_fut_est + n_pres_est
+            if m_est > m_max_exacto:
+                mem_gb = _estimar_mem_gb(n_pres_est, m_est, k_max)
+                if mem_gb > LIMITE_MEM_GB:
+                    print(
+                        f"  ADVERTENCIA: modo directo estima ~{mem_gb:.1f} GB para "
+                        f"k={k_max}, m={m_est} (n_pres={n_pres_est}). "
+                        f"Usar --modo jerarquico para evitar OOM."
+                    )
+
         cola    = multiprocessing.Queue()
         proceso = multiprocessing.Process(
             target=_worker,
             args=(estado_inicial, condiciones, alcance, mecanismo,
                   tpm, variante, m_max_exacto, k_min, k_max, cola,
-                  m_max_candidatos),
+                  m_max_candidatos, modo),
         )
         t_ini = time.perf_counter()
         proceso.start()
@@ -287,16 +324,18 @@ def ejecutar_desde_excel(
                 fila[f"{prefix}_Perdida"]      = phi_str
                 fila[f"{prefix}_Tiempo_s"]     = t_str
                 fila[f"{prefix}_N_candidatos"] = d["n_candidatos"]
+                fila[f"{prefix}_ModoUsado"]    = d.get("modo_usado", modo)
                 if error is None:
                     print(
                         f"  k={k}: phi={d['phi']:.6f}  t={d['tiempo_s']:.3f}s"
-                        f"  cand={d['n_candidatos']}"
+                        f"  cand={d['n_candidatos']}  modo={d.get('modo_usado', modo)}"
                     )
             else:
                 fila[f"{prefix}_Particion"]    = None
                 fila[f"{prefix}_Perdida"]      = None
                 fila[f"{prefix}_Tiempo_s"]     = None
                 fila[f"{prefix}_N_candidatos"] = None
+                fila[f"{prefix}_ModoUsado"]    = None
 
         if error:
             print(f"  ERROR: {error}")
@@ -341,6 +380,9 @@ def main() -> None:
                              "Reducir (ej. 500) alivia presion de RAM en sistemas grandes (n>=20).")
     parser.add_argument("--etiqueta", type=str, default="",
                         help="Sufijo adicional para el nombre del archivo de salida")
+    parser.add_argument("--modo", choices=["directo", "jerarquico"], default="directo",
+                        help="Modo de busqueda: directo (default, exhaustivo S(m,k)) o "
+                             "jerarquico (biparticiones sucesivas, recomendado para n>=15, k>=4).")
 
     k_group = parser.add_mutually_exclusive_group()
     k_group.add_argument("--k",     type=int,
@@ -367,6 +409,7 @@ def main() -> None:
 
     m_max_exacto = 999 if args.exacto else M_MAX_EXACTO
     etiqueta     = "exacto" if args.exacto else args.etiqueta
+    modo         = args.modo
 
     ejecutar_desde_excel(
         sheet_name       = args.hoja,
@@ -378,6 +421,7 @@ def main() -> None:
         m_max_exacto     = m_max_exacto,
         m_max_candidatos = args.m_max_candidatos,
         etiqueta         = etiqueta,
+        modo             = modo,
     )
 
 
