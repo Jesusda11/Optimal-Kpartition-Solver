@@ -14,3 +14,7 @@ dependencies = [
     "pyttsx3==2.98",
     "colorama==0.4.5",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
