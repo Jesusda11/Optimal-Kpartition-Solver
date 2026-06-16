@@ -13,3 +13,7 @@ dependencies = [
     "pyphi>=1.2.0",
     "pyttsx3>=2.99",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
